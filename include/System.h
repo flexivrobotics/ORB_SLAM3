@@ -140,6 +140,12 @@ public:
     void Shutdown();
     bool isShutDown();
 
+    // True once the viewer window has been closed by the operator (or if
+    // there is no viewer at all). Lets a caller that wants to keep the
+    // viewer open after processing finishes poll for when to exit, instead
+    // of running forever or exiting immediately.
+    bool isViewerFinished();
+
     // Save camera trajectory in the TUM RGB-D dataset format.
     // Only for stereo and RGB-D. This method does not work for monocular.
     // Call first Shutdown()

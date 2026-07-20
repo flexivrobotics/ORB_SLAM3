@@ -566,6 +566,10 @@ bool System::isShutDown() {
     return mbShutDown;
 }
 
+bool System::isViewerFinished() {
+    return (mpViewer == nullptr) || mpViewer->isFinished();
+}
+
 void System::SaveTrajectoryTUM(const string &filename)
 {
     cout << endl << "Saving camera trajectory to " << filename << " ..." << endl;

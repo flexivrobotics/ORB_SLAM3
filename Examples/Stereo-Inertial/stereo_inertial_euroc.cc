@@ -219,25 +219,35 @@ int main(int argc, char **argv)
 
 
     }
-    // Stop all threads
+    // Stop all threads. Must happen before any SaveTrajectory* call below --
+    // LocalMapping/LoopClosing keep mutating the map/keyframes until asked to
+    // stop, and reading that data concurrently with an in-flight loop closure
+    // or bundle adjustment corrupts the heap.
     SLAM.Shutdown();
 
-
-    // Save camera trajectory
+    // Save camera trajectory. We skip SaveKeyFrameTrajectoryEuRoC here: it's
+    // unused by the caller (00_run_offline_slam.py only reads f_<session>.txt)
+    // and can crash or hang indefinitely (System::Shutdown() above only
+    // requests LocalMapping/LoopClosing finish, it does not wait for them --
+    // that wait loop is commented out upstream -- so this call can race a
+    // virtual call against one of those threads still tearing down).
     if (bFileName)
     {
-        const string kf_file =  "kf_" + string(argv[argc-1]) + ".txt";
         const string f_file =  "f_" + string(argv[argc-1]) + ".txt";
         SLAM.SaveTrajectoryEuRoC(f_file);
-        SLAM.SaveKeyFrameTrajectoryEuRoC(kf_file);
     }
     else
     {
         SLAM.SaveTrajectoryEuRoC("CameraTrajectory.txt");
-        SLAM.SaveKeyFrameTrajectoryEuRoC("KeyFrameTrajectory.txt");
     }
 
-    return 0;
+    // Keep the process (and its viewer -- Shutdown() above does not close it)
+    // alive so the operator can keep inspecting the reconstructed
+    // map/trajectory, and exit once they close the viewer window.
+    while (!SLAM.isViewerFinished())
+    {
+        usleep(500000);
+    }
 }
 
 void LoadImages(const string &strPathLeft, const string &strPathRight, const string &strPathTimes,

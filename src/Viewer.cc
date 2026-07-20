@@ -376,7 +376,12 @@ void Viewer::Run()
             }
         }
 
-        if(CheckFinish())
+        // pangolin::ShouldQuit() becomes true once the operator closes this
+        // window (e.g. its native close button); System::Shutdown() never
+        // requests this viewer finish (that path is disabled above), so
+        // without this check the window would otherwise never report itself
+        // finished on its own.
+        if(CheckFinish() || pangolin::ShouldQuit())
             break;
     }
 
