@@ -41,9 +41,40 @@ void LoadIMU(const string &strImuPath, vector<double> &vTimeStamps, vector<cv::P
 
 int main(int argc, char **argv)
 {
+    // Look for optional "--no-viewer"/"--viewer-auto-exit" flags anywhere in
+    // the arguments and strip them out before the positional parsing below,
+    // so argc/argv indexing for vocabulary/settings/sequence/times/session
+    // stays exactly as it was regardless of where the flags appear.
+    // - The viewer is opened (bUseViewer=true) by default; pass --no-viewer
+    //   to disable it, e.g. for unattended/batch runs where nothing will
+    //   close the window.
+    // - Normally, once the viewer is open, the process waits for it to be
+    //   manually closed before exiting (see the isViewerFinished() loop
+    //   below), so an operator can linger and inspect the reconstructed
+    //   map/trajectory. --viewer-auto-exit skips that wait: the window still
+    //   shows live progress, but the process exits as soon as processing
+    //   finishes instead of blocking on a manual close.
+    bool bUseViewer = true;
+    bool bAutoExitViewer = false;
+    for (int i = 1; i < argc; i++)
+    {
+        std::string arg = argv[i];
+        if (arg == "--no-viewer" || arg == "--viewer-auto-exit")
+        {
+            if (arg == "--no-viewer")
+                bUseViewer = false;
+            else
+                bAutoExitViewer = true;
+            for (int j = i; j < argc - 1; j++)
+                argv[j] = argv[j + 1];
+            argc--;
+            i--;
+        }
+    }
+
     if(argc < 5)
     {
-        cerr << endl << "Usage: ./stereo_inertial_euroc path_to_vocabulary path_to_settings path_to_sequence_folder_1 path_to_times_file_1 (path_to_image_folder_2 path_to_times_file_2 ... path_to_image_folder_N path_to_times_file_N) " << endl;
+        cerr << endl << "Usage: ./stereo_inertial_euroc path_to_vocabulary path_to_settings path_to_sequence_folder_1 path_to_times_file_1 (path_to_image_folder_2 path_to_times_file_2 ... path_to_image_folder_N path_to_times_file_N) [session_name] [--no-viewer] [--viewer-auto-exit]" << endl;
         return 1;
     }
 
@@ -129,7 +160,7 @@ int main(int argc, char **argv)
     cout.precision(17);
 
     // Create SLAM system. It initializes all system threads and gets ready to process frames.
-    ORB_SLAM3::System SLAM(argv[1],argv[2],ORB_SLAM3::System::IMU_STEREO, true);
+    ORB_SLAM3::System SLAM(argv[1],argv[2],ORB_SLAM3::System::IMU_STEREO, bUseViewer);
 
     cv::Mat imLeft, imRight;
     for (seq = 0; seq<num_seq; seq++)
@@ -243,8 +274,10 @@ int main(int argc, char **argv)
 
     // Keep the process (and its viewer -- Shutdown() above does not close it)
     // alive so the operator can keep inspecting the reconstructed
-    // map/trajectory, and exit once they close the viewer window.
-    while (!SLAM.isViewerFinished())
+    // map/trajectory, and exit once they close the viewer window. Skipped
+    // entirely with --viewer-auto-exit: the viewer still showed live
+    // progress, but nothing here waits for it to be closed.
+    while (!bAutoExitViewer && !SLAM.isViewerFinished())
     {
         usleep(500000);
     }
