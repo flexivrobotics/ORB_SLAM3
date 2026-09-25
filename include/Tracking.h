@@ -125,7 +125,8 @@ public:
         OK=2,
         RECENTLY_LOST=3,
         LOST=4,
-        OK_KLT=5
+        OK_KLT=5,
+        INIT_RELOCALIZE=6 // atlas loaded from disk, relocalizing before mapping
     };
 
     eTrackingState mState;
@@ -212,6 +213,7 @@ protected:
     bool PredictStateIMU();
 
     bool Relocalization();
+    bool InitRelocalizeFromAtlas();
 
     void UpdateLocalMap();
     void UpdateLocalPoints();
@@ -327,6 +329,11 @@ protected:
     unsigned int mnLastInitFrameId;
 
     bool mbCreatedMap;
+
+    // Map loaded from disk that tracking resumes in (NULL when starting from
+    // scratch), and whether the live session has been anchored to it yet.
+    Map* mpLoadedMap;
+    bool mbLoadedMapAnchored;
 
     //Motion Model
     bool mbVelocity{false};

@@ -347,6 +347,10 @@ public:
 
     bool mbCurrentPlaceRecognition;
 
+    // Keyframe loaded from an atlas file. Its pose is held fixed by every
+    // optimization and it is never culled, so the loaded map keeps its frame.
+    bool mbFixedPose = false;
+
 
     // Variables used by loop closing
     Sophus::SE3f mTcwGBA;

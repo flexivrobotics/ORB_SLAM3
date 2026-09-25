@@ -352,6 +352,10 @@ void FrameDrawer::DrawTextInfo(cv::Mat &im, int nState, cv::Mat &imText)
     {
         s << " TRACK LOST. TRYING TO RELOCALIZE ";
     }
+    else if(nState==Tracking::INIT_RELOCALIZE)
+    {
+        s << " RELOCALIZING IN LOADED MAP ";
+    }
     else if(nState==Tracking::SYSTEM_NOT_READY)
     {
         s << " LOADING ORB VOCABULARY. PLEASE WAIT...";

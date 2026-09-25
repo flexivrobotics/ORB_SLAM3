@@ -126,6 +126,11 @@ void LoopClosing::Run()
                     {
                         cout << "IMU is not initilized, merge is aborted" << endl;
                     }
+                    else if(mpCurrentKF->GetMap()->mbFromAtlasFile)
+                    {
+                        // Merging would move the current map into the other one's frame
+                        cout << "Current map is loaded from file, merge is aborted" << endl;
+                    }
                     else
                     {
                         Sophus::SE3d mTmw = mpMergeMatchedKF->GetPose().cast<double>();
@@ -1046,7 +1051,7 @@ void LoopClosing::CorrectLoop()
         {
             KeyFrame* pKFi = *vit;
 
-            if(pKFi!=mpCurrentKF)
+            if(pKFi!=mpCurrentKF && !pKFi->mbFixedPose)
             {
                 Sophus::SE3f Tiw = pKFi->GetPose();
                 Sophus::SE3d Tic = (Tiw * Twc).cast<double>();
@@ -1087,6 +1092,10 @@ void LoopClosing::CorrectLoop()
                 if(pMPi->isBad())
                     continue;
                 if(pMPi->mnCorrectedByKF==mpCurrentKF->mnId)
+                    continue;
+                // Points anchored to a loaded keyframe stay in the loaded frame
+                KeyFrame* pRefKF = pMPi->GetReferenceKeyFrame();
+                if(pRefKF && pRefKF->mbFixedPose)
                     continue;
 
                 // Project with non-corrected pose and project back with corrected pose

@@ -122,7 +122,7 @@ void Optimizer::BundleAdjustment(const vector<KeyFrame *> &vpKFs, const vector<M
         Sophus::SE3<float> Tcw = pKF->GetPose();
         vSE3->setEstimate(g2o::SE3Quat(Tcw.unit_quaternion().cast<double>(),Tcw.translation().cast<double>()));
         vSE3->setId(pKF->mnId);
-        vSE3->setFixed(pKF->mnId==pMap->GetInitKFid());
+        vSE3->setFixed(pKF->mnId==pMap->GetInitKFid() || pKF->mbFixedPose);
         optimizer.addVertex(vSE3);
         if(pKF->mnId>maxKFid)
             maxKFid=pKF->mnId;
@@ -430,6 +430,11 @@ void Optimizer::FullInertialBA(Map *pMap, int its, const bool bFixLocal, const l
             if(!bFixed)
                 nNonFixed++;
             VP->setFixed(bFixed);
+        }
+        if(pKFi->mbFixedPose)
+        {
+            bFixed = true;
+            VP->setFixed(true);
         }
         optimizer.addVertex(VP);
 
@@ -1217,7 +1222,7 @@ void Optimizer::LocalBundleAdjustment(KeyFrame *pKF, bool* pbStopFlag, Map* pMap
         Sophus::SE3<float> Tcw = pKFi->GetPose();
         vSE3->setEstimate(g2o::SE3Quat(Tcw.unit_quaternion().cast<double>(), Tcw.translation().cast<double>()));
         vSE3->setId(pKFi->mnId);
-        vSE3->setFixed(pKFi->mnId==pMap->GetInitKFid());
+        vSE3->setFixed(pKFi->mnId==pMap->GetInitKFid() || pKFi->mbFixedPose);
         optimizer.addVertex(vSE3);
         if(pKFi->mnId>maxKFid)
             maxKFid=pKFi->mnId;
@@ -1554,7 +1559,7 @@ void Optimizer::OptimizeEssentialGraph(Map* pMap, KeyFrame* pLoopKF, KeyFrame* p
             VSim3->setEstimate(Siw);
         }
 
-        if(pKF->mnId==pMap->GetInitKFid())
+        if(pKF->mnId==pMap->GetInitKFid() || pKF->mbFixedPose)
             VSim3->setFixed(true);
 
         VSim3->setId(nIDi);
@@ -1894,7 +1899,7 @@ void Optimizer::OptimizeEssentialGraph(KeyFrame* pCurKF, vector<KeyFrame*> &vpFi
         vScw[nIDi] = Siw;
         VSim3->setEstimate(Siw);
 
-        VSim3->setFixed(false);
+        VSim3->setFixed(pKFi->mbFixedPose);
 
         VSim3->setId(nIDi);
         VSim3->setMarginalized(false);
@@ -2532,22 +2537,22 @@ void Optimizer::LocalInertialBA(KeyFrame *pKF, bool *pbStopFlag, Map *pMap, int&
 
         VertexPose * VP = new VertexPose(pKFi);
         VP->setId(pKFi->mnId);
-        VP->setFixed(false);
+        VP->setFixed(pKFi->mbFixedPose);
         optimizer.addVertex(VP);
 
         if(pKFi->bImu)
         {
             VertexVelocity* VV = new VertexVelocity(pKFi);
             VV->setId(maxKFid+3*(pKFi->mnId)+1);
-            VV->setFixed(false);
+            VV->setFixed(pKFi->mbFixedPose);
             optimizer.addVertex(VV);
             VertexGyroBias* VG = new VertexGyroBias(pKFi);
             VG->setId(maxKFid+3*(pKFi->mnId)+2);
-            VG->setFixed(false);
+            VG->setFixed(pKFi->mbFixedPose);
             optimizer.addVertex(VG);
             VertexAccBias* VA = new VertexAccBias(pKFi);
             VA->setId(maxKFid+3*(pKFi->mnId)+3);
-            VA->setFixed(false);
+            VA->setFixed(pKFi->mbFixedPose);
             optimizer.addVertex(VA);
         }
     }
@@ -2558,7 +2563,7 @@ void Optimizer::LocalInertialBA(KeyFrame *pKF, bool *pbStopFlag, Map *pMap, int&
         KeyFrame* pKFi = *it;
         VertexPose * VP = new VertexPose(pKFi);
         VP->setId(pKFi->mnId);
-        VP->setFixed(false);
+        VP->setFixed(pKFi->mbFixedPose);
         optimizer.addVertex(VP);
     }
 
@@ -3573,6 +3578,7 @@ void Optimizer::LocalBundleAdjustment(KeyFrame* pMainKF,vector<KeyFrame*> vpAdju
         Sophus::SE3<float> Tcw = pKFi->GetPose();
         vSE3->setEstimate(g2o::SE3Quat(Tcw.unit_quaternion().cast<double>(),Tcw.translation().cast<double>()));
         vSE3->setId(pKFi->mnId);
+        vSE3->setFixed(pKFi->mbFixedPose);
         optimizer.addVertex(vSE3);
         if(pKFi->mnId>maxKFid)
             maxKFid=pKFi->mnId;
@@ -4108,22 +4114,22 @@ void Optimizer::MergeInertialBA(KeyFrame* pCurrKF, KeyFrame* pMergeKF, bool *pbS
 
         VertexPose * VP = new VertexPose(pKFi);
         VP->setId(pKFi->mnId);
-        VP->setFixed(false);
+        VP->setFixed(pKFi->mbFixedPose);
         optimizer.addVertex(VP);
 
         if(pKFi->bImu)
         {
             VertexVelocity* VV = new VertexVelocity(pKFi);
             VV->setId(maxKFid+3*(pKFi->mnId)+1);
-            VV->setFixed(false);
+            VV->setFixed(pKFi->mbFixedPose);
             optimizer.addVertex(VV);
             VertexGyroBias* VG = new VertexGyroBias(pKFi);
             VG->setId(maxKFid+3*(pKFi->mnId)+2);
-            VG->setFixed(false);
+            VG->setFixed(pKFi->mbFixedPose);
             optimizer.addVertex(VG);
             VertexAccBias* VA = new VertexAccBias(pKFi);
             VA->setId(maxKFid+3*(pKFi->mnId)+3);
-            VA->setFixed(false);
+            VA->setFixed(pKFi->mbFixedPose);
             optimizer.addVertex(VA);
         }
     }
@@ -4136,22 +4142,22 @@ void Optimizer::MergeInertialBA(KeyFrame* pCurrKF, KeyFrame* pMergeKF, bool *pbS
 
         VertexPose * VP = new VertexPose(pKFi);
         VP->setId(pKFi->mnId);
-        VP->setFixed(false);
+        VP->setFixed(pKFi->mbFixedPose);
         optimizer.addVertex(VP);
 
         if(pKFi->bImu)
         {
             VertexVelocity* VV = new VertexVelocity(pKFi);
             VV->setId(maxKFid+3*(pKFi->mnId)+1);
-            VV->setFixed(false);
+            VV->setFixed(pKFi->mbFixedPose);
             optimizer.addVertex(VV);
             VertexGyroBias* VG = new VertexGyroBias(pKFi);
             VG->setId(maxKFid+3*(pKFi->mnId)+2);
-            VG->setFixed(false);
+            VG->setFixed(pKFi->mbFixedPose);
             optimizer.addVertex(VG);
             VertexAccBias* VA = new VertexAccBias(pKFi);
             VA->setId(maxKFid+3*(pKFi->mnId)+3);
-            VA->setFixed(false);
+            VA->setFixed(pKFi->mbFixedPose);
             optimizer.addVertex(VA);
         }
     }
@@ -5348,7 +5354,7 @@ void Optimizer::OptimizeEssentialGraph4DoF(Map* pMap, KeyFrame* pLoopKF, KeyFram
             V4DoF = new VertexPose4DoF(pKF);
         }
 
-        if(pKF==pLoopKF)
+        if(pKF==pLoopKF || pKF->mbFixedPose)
             V4DoF->setFixed(true);
 
         V4DoF->setId(nIDi);

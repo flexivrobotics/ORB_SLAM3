@@ -51,7 +51,14 @@ Tracking::Tracking(System *pSys, ORBVocabulary *pVoc, FrameDrawer *pFrameDrawer,
       mpFrameDrawer(pFrameDrawer), mpMapDrawer(pMapDrawer), mpAtlas(pAtlas),
       mnLastRelocFrameId(0), time_recently_lost(5.0), mnInitialFrameId(0),
       mbCreatedMap(false), mnFirstFrameId(0), mpCamera2(nullptr),
-      mpLastKeyFrame(static_cast<KeyFrame *>(NULL)) {
+      mpLastKeyFrame(static_cast<KeyFrame *>(NULL)), mpLoadedMap(NULL),
+      mbLoadedMapAnchored(false) {
+  // System makes a map loaded from disk the current one before creating the
+  // tracker. Resume tracking in it instead of initializing a new map.
+  Map *pInitialMap = pAtlas->GetCurrentMap();
+  if (pInitialMap && pInitialMap->KeyFramesInMap() > 0)
+    mpLoadedMap = pInitialMap;
+
   // Load camera parameters from settings file
   if (settings) {
     newParameterLoader(settings);
@@ -1762,7 +1769,11 @@ void Tracking::Track() {
     mCurrentFrame.SetNewBias(mpLastKeyFrame->GetImuBias());
 
   if (mState == NO_IMAGES_YET) {
-    mState = NOT_INITIALIZED;
+    if (mpLoadedMap && pCurrentMap == mpLoadedMap &&
+        pCurrentMap->KeyFramesInMap() > 0)
+      mState = mbOnlyTracking ? LOST : INIT_RELOCALIZE;
+    else
+      mState = NOT_INITIALIZED;
   }
 
   mLastProcessedState = mState;
@@ -1831,6 +1842,9 @@ void Tracking::Track() {
     // Initial camera pose estimation using motion model or relocalization (if
     // tracking is lost)
     if (!mbOnlyTracking) {
+
+      if (mState == LOST && pCurrentMap == mpLoadedMap)
+        mState = INIT_RELOCALIZE;
 
       // State OK
       // Local Mapping is activated. This is the normal behaviour, unless
@@ -1916,13 +1930,15 @@ void Tracking::Track() {
           Verbose::PrintMess("done", Verbose::VERBOSITY_NORMAL);
 
           return;
+        } else if (mState == INIT_RELOCALIZE) {
+          bOK = InitRelocalizeFromAtlas();
         }
       }
 
     } else {
       // Localization Mode: Local Mapping is deactivated (TODO Not available in
       // inertial mode)
-      if (mState == LOST) {
+      if (mState == LOST || mState == INIT_RELOCALIZE) {
         if (mSensor == System::IMU_MONOCULAR || mSensor == System::IMU_STEREO ||
             mSensor == System::IMU_RGBD)
           Verbose::PrintMess("IMU. State LOST", Verbose::VERBOSITY_NORMAL);
@@ -2148,6 +2164,14 @@ void Tracking::Track() {
         if (mCurrentFrame.mvpMapPoints[i] && mCurrentFrame.mvbOutlier[i])
           mCurrentFrame.mvpMapPoints[i] = static_cast<MapPoint *>(NULL);
       }
+    }
+
+    // Tracking lost in the map loaded from disk: keep relocalizing in it
+    // instead of resetting it or starting a new map.
+    if (mState == LOST && pCurrentMap == mpLoadedMap) {
+      mState = INIT_RELOCALIZE;
+      mLastFrame = Frame(mCurrentFrame);
+      return;
     }
 
     // Reset if the camera get lost soon after initialization
@@ -3440,6 +3464,74 @@ void Tracking::UpdateLocalKeyFrames() {
   }
 }
 
+// Relocalize in the map loaded from disk (mState == INIT_RELOCALIZE). The
+// first success anchors the live session to that map with a new keyframe;
+// tracking and mapping then continue in the loaded map.
+//
+// The new keyframe is not linked to the loaded keyframes through
+// mPrevKF/mNextKF: the two sessions share no IMU data, so an inertial edge
+// between them would be wrong. The inertial chain restarts at the new keyframe.
+bool Tracking::InitRelocalizeFromAtlas() {
+  const bool bImu = mSensor == System::IMU_MONOCULAR ||
+                    mSensor == System::IMU_STEREO ||
+                    mSensor == System::IMU_RGBD;
+
+  if (mbLoadedMapAnchored) {
+    // Lost again after the session was anchored: the IMU chain from
+    // mpLastKeyFrame is continuous, so a plain relocalization is enough.
+    if (!Relocalization())
+      return false;
+    mState = OK;
+    return true;
+  }
+
+  vector<KeyFrame *> vpKFs = mpLoadedMap->GetAllKeyFrames();
+  if (vpKFs.empty())
+    return false;
+  KeyFrame *pKFend = *max_element(vpKFs.begin(), vpKFs.end(), KeyFrame::lId);
+
+  if (bImu) {
+    // No live keyframe yet: use the bias estimated in the loaded map, and keep
+    // the preintegration to one frame until relocalization succeeds.
+    mCurrentFrame.SetNewBias(pKFend->GetImuBias());
+    mpImuPreintegratedFromLastKF->Initialize(pKFend->GetImuBias());
+    if (!mCurrentFrame.mpImuPreintegrated)
+      mCurrentFrame.mpImuPreintegrated = mpImuPreintegratedFromLastKF;
+  }
+
+  if (!Relocalization()) {
+    Verbose::PrintMess("INIT_RELOCALIZE: relocalization in loaded map failed",
+                       Verbose::VERBOSITY_DEBUG);
+    return false;
+  }
+
+  Verbose::PrintMess("INIT_RELOCALIZE: relocalized in loaded map",
+                     Verbose::VERBOSITY_NORMAL);
+
+  // Velocity is unobservable from a single relocalized frame; assume the
+  // camera is still, the inertial optimization corrects it afterwards.
+  if (bImu)
+    mCurrentFrame.SetVelocity(Eigen::Vector3f::Zero());
+
+  // Takes ownership of mCurrentFrame.mpImuPreintegrated, as in
+  // CreateNewKeyFrame().
+  KeyFrame *pKF = new KeyFrame(mCurrentFrame, mpLoadedMap, mpKeyFrameDB);
+  if (bImu)
+    mpImuPreintegratedFromLastKF =
+        new IMU::Preintegrated(pKF->GetImuBias(), pKF->mImuCalib);
+
+  mpReferenceKF = pKF;
+  mCurrentFrame.mpReferenceKF = pKF;
+  mnLastKeyFrameId = mCurrentFrame.mnId;
+  mpLastKeyFrame = pKF;
+
+  mpLocalMapper->InsertKeyFrame(pKF);
+
+  mbLoadedMapAnchored = true;
+  mState = OK;
+  return true;
+}
+
 bool Tracking::Relocalization() {
   Verbose::PrintMess("Starting relocalization", Verbose::VERBOSITY_NORMAL);
   // Compute Bag of Words Vector
@@ -3626,6 +3718,8 @@ void Tracking::Reset(bool bLocMap) {
 
   // Clear Map (this erase MapPoints and KeyFrames)
   mpAtlas->clearAtlas();
+  mpLoadedMap = NULL;
+  mbLoadedMapAnchored = false;
   mpAtlas->CreateNewMap();
   if (mSensor == System::IMU_STEREO || mSensor == System::IMU_MONOCULAR ||
       mSensor == System::IMU_RGBD)
@@ -3691,6 +3785,11 @@ void Tracking::ResetActiveMap(bool bLocMap) {
   mnLastInitFrameId = Frame::nNextId;
   // mnLastRelocFrameId = mnLastInitFrameId;
   mState = NO_IMAGES_YET; // NOT_INITIALIZED;
+
+  if (pMap == mpLoadedMap) {
+    mpLoadedMap = NULL;
+    mbLoadedMapAnchored = false;
+  }
 
   mbReadyToInitializate = false;
 

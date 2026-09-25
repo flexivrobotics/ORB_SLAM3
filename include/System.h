@@ -102,7 +102,9 @@ public:
 public:
     EIGEN_MAKE_ALIGNED_OPERATOR_NEW
     // Initialize the SLAM system. It launches the Local Mapping, Loop Closing and Viewer threads.
-    System(const string &strVocFile, const string &strSettingsFile, const eSensor sensor, const bool bUseViewer = true, const int initFr = 0, const string &strSequence = std::string());
+    // strLoadAtlasFile, if not empty, overrides System.LoadAtlasFromFile from the settings file:
+    // the atlas <strLoadAtlasFile>.osa is loaded and SLAM (tracking + mapping) resumes in it.
+    System(const string &strVocFile, const string &strSettingsFile, const eSensor sensor, const bool bUseViewer = true, const int initFr = 0, const string &strSequence = std::string(), const string &strLoadAtlasFile = std::string());
 
     // Proccess the given stereo frame. Images must be synchronized and rectified.
     // Input images: RGB (CV_8UC3) or grayscale (CV_8U). RGB is converted to grayscale.
@@ -139,6 +141,11 @@ public:
     // This function must be called before saving the trajectory.
     void Shutdown();
     bool isShutDown();
+
+    // Save the atlas to <strFile>.osa on Shutdown(), overriding
+    // System.SaveAtlasToFile from the settings file. A trailing ".osa" is
+    // accepted and not doubled. Relative paths resolve against the cwd.
+    void SetSaveAtlasFile(const string &strFile);
 
     // True once the viewer window has been closed by the operator (or if
     // there is no viewer at all). Lets a caller that wants to keep the
