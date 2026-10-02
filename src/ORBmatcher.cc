@@ -1970,7 +1970,16 @@ namespace ORB_SLAM3
 
                         if(mbCheckOrientation)
                         {
-                            float rot = pKF->mvKeysUn[i].angle-CurrentFrame.mvKeysUn[bestIdx2].angle;
+                            // With two cameras (NLeft != -1), vpMPs spans both
+                            // cameras' keypoints -- left ones first, then right
+                            // ones -- while mvKeysUn only holds the left ones, so
+                            // indexing it with a right-camera i reads past its
+                            // end, yielding a garbage angle and an out-of-range
+                            // bin (the assert below is compiled out in Release).
+                            const cv::KeyPoint &kpKF = (pKF->NLeft == -1) ? pKF->mvKeysUn[i]
+                                                     : (i < (size_t)pKF->NLeft) ? pKF->mvKeys[i]
+                                                                                : pKF->mvKeysRight[i - pKF->NLeft];
+                            float rot = kpKF.angle-CurrentFrame.mvKeysUn[bestIdx2].angle;
                             if(rot<0.0)
                                 rot+=360.0f;
                             int bin = round(rot*factor);

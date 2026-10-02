@@ -92,7 +92,14 @@ namespace ORB_SLAM3 {
     private:
         //Parameters vector corresponds to
         //      [fx, fy, cx, cy]
-        TwoViewReconstruction* tvr;
+        // Default member initializer so every constructor leaves this safely
+        // null, including the no-arg one boost::serialization
+        // default-constructs when deserializing a camera from a saved atlas
+        // -- that one doesn't list tvr in its init list, so without this it
+        // reads as garbage: ~Pinhole() would delete a garbage pointer, and
+        // ReconstructWithTwoViews' `if(!tvr)` check would skip rebuilding it
+        // and dereference the garbage pointer instead.
+        TwoViewReconstruction* tvr = nullptr;
     };
 }
 

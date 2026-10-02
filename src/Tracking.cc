@@ -62,6 +62,17 @@ Tracking::Tracking(System *pSys, ORBVocabulary *pVoc, FrameDrawer *pFrameDrawer,
   // Load camera parameters from settings file
   if (settings) {
     newParameterLoader(settings);
+
+    // The legacy-parser branch below sets this to mMaxFrames (~1 s of
+    // visual-only tracking after every relocalization); with the Settings
+    // loader it was left uninitialized. Use a fixed 20-frame visual-only
+    // grace period (0.5 s at 40 fps) after every relocalization, e.g. in a
+    // loaded atlas, giving Local Mapping's inertial BA time to estimate the
+    // velocity (assumed zero at relocalization) before the IMU is used. The
+    // first inertial frame after it relies on TrackLocalMap() falling back to
+    // PoseInertialOptimizationLastKeyFrame(), since the visual-only frames
+    // before it have no mpcpi.
+    mnFramesToResetIMU = 20;
   } else {
     cv::FileStorage fSettings(strSettingPath, cv::FileStorage::READ);
 
@@ -2052,24 +2063,15 @@ void Tracking::Track() {
       //}
     }
 
-    // Save frame if recent relocalization, since they are used for IMU reset
-    // (as we are making copy, it shluld be once mCurrFrame is completely
-    // modified)
-    if ((mCurrentFrame.mnId < (mnLastRelocFrameId + mnFramesToResetIMU)) &&
-        (mCurrentFrame.mnId > mnFramesToResetIMU) &&
-        (mSensor == System::IMU_MONOCULAR || mSensor == System::IMU_STEREO ||
-         mSensor == System::IMU_RGBD) &&
-        pCurrentMap->isImuInitialized()) {
-      // TODO check this situation
-      Verbose::PrintMess("Saving pointer to frame. imu needs reset...",
-                         Verbose::VERBOSITY_NORMAL);
-      Frame *pF = new Frame(mCurrentFrame);
-      pF->mpPrevFrame = new Frame(mLastFrame);
-
-      // Load preintegration
-      pF->mpImuPreintegratedFrame =
-          new IMU::Preintegrated(mCurrentFrame.mpImuPreintegratedFrame);
-    }
+    // Upstream used to copy mCurrentFrame/mLastFrame and their preintegration
+    // here on every frame of the post-relocalization grace period "for IMU
+    // reset", but nothing ever used the copies (pF just leaked, and
+    // ResetFrameIMU() below is an empty TODO). It only ever ran once
+    // mnFramesToResetIMU got initialized for the Settings loader, and then
+    // crashed: after relocalizing in a loaded atlas, mLastFrame can still be
+    // a default-constructed Frame (empty mK, which the Frame copy constructor
+    // reads unconditionally via Converter::toMatrix3f), and
+    // mpImuPreintegratedFrame can be null after an IMU dropout. Removed.
 
     if (pCurrentMap->isImuInitialized()) {
       if (bOK) {
@@ -2859,7 +2861,12 @@ bool Tracking::TrackLocalMap() {
       Optimizer::PoseOptimization(&mCurrentFrame);
     } else {
       // if(!mbMapUpdated && mState == OK) //  && (mnMatchesInliers>30))
-      if (!mbMapUpdated) //  && (mnMatchesInliers>30))
+      // Also fall back to the last-keyframe variant when the last frame has no
+      // pose-IMU constraint to anchor to, e.g. the first inertial frame after
+      // the post-relocalization grace period (those frames are optimized
+      // visual-only, which doesn't set mpcpi); the last-frame variant would
+      // dereference it unconditionally in EdgePriorPoseImu.
+      if (!mbMapUpdated && mLastFrame.mpcpi) //  && (mnMatchesInliers>30))
       {
         Verbose::PrintMess("TLM: PoseInertialOptimizationLastFrame ",
                            Verbose::VERBOSITY_DEBUG);
