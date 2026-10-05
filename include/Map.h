@@ -195,6 +195,12 @@ protected:
     bool mbBad = false;
 
     bool mbIsInertial;
+
+public:
+    // Map loaded from an atlas file. It is never moved by a map merge.
+    bool mbFromAtlasFile = false;
+
+protected:
     bool mbIMU_BA1;
     bool mbIMU_BA2;
 

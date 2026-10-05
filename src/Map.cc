@@ -359,7 +359,15 @@ void Map::SetLastMapChange(int currentChangeId)
 void Map::PreSave(std::set<GeometricCamera*> &spCams)
 {
     int nMPWithoutObs = 0;
-    for(MapPoint* pMPi : mspMapPoints)
+    // Both loops below iterate a snapshot of mspMapPoints rather than the set
+    // itself: EraseObservation() (called directly here, and from
+    // MapPoint::PreSave() for observations by keyframes outside this map)
+    // calls SetBadFlag() once a point drops to <= 2 observations, which
+    // erases it from mspMapPoints via Map::EraseMapPoint(). Doing that while
+    // iterating mspMapPoints invalidates the iterator (crashes in
+    // _Rb_tree_increment on the next ++it).
+    const std::set<MapPoint*> spMapPoints = mspMapPoints;
+    for(MapPoint* pMPi : spMapPoints)
     {
         if(!pMPi || pMPi->isBad())
             continue;
@@ -390,7 +398,7 @@ void Map::PreSave(std::set<GeometricCamera*> &spCams)
 
     // Backup of MapPoints
     mvpBackupMapPoints.clear();
-    for(MapPoint* pMPi : mspMapPoints)
+    for(MapPoint* pMPi : spMapPoints)
     {
         if(!pMPi || pMPi->isBad())
             continue;

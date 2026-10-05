@@ -38,8 +38,19 @@ namespace ORB_SLAM3
 
 Verbose::eLevel Verbose::th = Verbose::VERBOSITY_NORMAL;
 
+// Atlas file names are stored without the ".osa" extension, which
+// SaveAtlas/LoadAtlas append. Accept names given with it too.
+static string StripAtlasExtension(const string &strFile)
+{
+    const string ext = ".osa";
+    if(strFile.size() > ext.size() && strFile.compare(strFile.size() - ext.size(), ext.size(), ext) == 0)
+        return strFile.substr(0, strFile.size() - ext.size());
+    return strFile;
+}
+
 System::System(const string &strVocFile, const string &strSettingsFile, const eSensor sensor,
-               const bool bUseViewer, const int initFr, const string &strSequence):
+               const bool bUseViewer, const int initFr, const string &strSequence,
+               const string &strLoadAtlasFile):
     mSensor(sensor), mpViewer(static_cast<Viewer*>(NULL)), mbReset(false), mbResetActiveMap(false),
     mbActivateLocalizationMode(false), mbDeactivateLocalizationMode(false), mbShutDown(false)
 {
@@ -97,6 +108,9 @@ System::System(const string &strVocFile, const string &strSettingsFile, const eS
             mStrSaveAtlasToFile = (string)node;
         }
     }
+
+    if(!strLoadAtlasFile.empty())
+        mStrLoadAtlasFromFile = StripAtlasExtension(strLoadAtlasFile);
 
     node = fsSettings["loopClosing"];
     bool activeLC = true;
@@ -168,7 +182,27 @@ System::System(const string &strVocFile, const string &strSettingsFile, const eS
 
         loadedAtlas = true;
 
-        mpAtlas->CreateNewMap();
+        // Resume tracking in the loaded map with the most keyframes instead of
+        // starting a new one. Tracking relocalizes in it on the first frames
+        // (Tracking::INIT_RELOCALIZE).
+        Map* pLoadedMap = NULL;
+        for(Map* pMap : mpAtlas->GetAllMaps())
+            if(!pLoadedMap || pMap->KeyFramesInMap() > pLoadedMap->KeyFramesInMap())
+                pLoadedMap = pMap;
+        if(pLoadedMap && pLoadedMap->KeyFramesInMap() > 0)
+            mpAtlas->ChangeMap(pLoadedMap);
+        else
+            mpAtlas->CreateNewMap();
+
+        // Freeze the loaded keyframe poses; new keyframes are mapped around them
+        for(Map* pMap : mpAtlas->GetAllMaps())
+        {
+            if(pMap->KeyFramesInMap() == 0)
+                continue;
+            pMap->mbFromAtlasFile = true;
+            for(KeyFrame* pKF : pMap->GetAllKeyFrames())
+                pKF->mbFixedPose = true;
+        }
 
         //clock_t timeElapsed = clock() - start;
         //unsigned msElapsed = timeElapsed / (CLOCKS_PER_SEC / 1000);
@@ -547,6 +581,22 @@ void System::Shutdown()
 
     if(!mStrSaveAtlasToFile.empty())
     {
+        // Serializing the atlas while LocalMapping/LoopClosing (or a global
+        // BA) are still mutating it corrupts the saved file, so wait for them
+        // here -- bounded, since the general wait above is disabled because
+        // it can hang.
+        const int maxWaitMs = 60000;
+        int waitedMs = 0;
+        while((!mpLocalMapper->isFinished() || !mpLoopCloser->isFinished() || mpLoopCloser->isRunningGBA())
+              && waitedMs < maxWaitMs)
+        {
+            usleep(5000);
+            waitedMs += 5;
+        }
+        if(waitedMs >= maxWaitMs)
+            cerr << "WARNING: mapping threads did not stop within " << maxWaitMs / 1000
+                 << " s, saving atlas anyway" << endl;
+
         Verbose::PrintMess("Atlas saving to file " + mStrSaveAtlasToFile, Verbose::VERBOSITY_NORMAL);
         SaveAtlas(FileType::BINARY_FILE);
     }
@@ -559,6 +609,11 @@ void System::Shutdown()
 #endif
 
 
+}
+
+void System::SetSaveAtlasFile(const string &strFile)
+{
+    mStrSaveAtlasToFile = StripAtlasExtension(strFile);
 }
 
 bool System::isShutDown() {
@@ -1412,9 +1467,9 @@ void System::SaveAtlas(int type){
         // Save the current session
         mpAtlas->PreSave();
 
-        string pathSaveFileName = "./";
-        pathSaveFileName = pathSaveFileName.append(mStrSaveAtlasToFile);
-        pathSaveFileName = pathSaveFileName.append(".osa");
+        // No "./" prefix, so absolute paths work too (relative ones are
+        // resolved against the cwd either way)
+        string pathSaveFileName = mStrSaveAtlasToFile + ".osa";
 
         string strVocabularyChecksum = CalculateCheckSum(mStrVocabularyFilePath,TEXT_FILE);
         std::size_t found = mStrVocabularyFilePath.find_last_of("/\\");
@@ -1451,9 +1506,8 @@ bool System::LoadAtlas(int type)
     string strFileVoc, strVocChecksum;
     bool isRead = false;
 
-    string pathLoadFileName = "./";
-    pathLoadFileName = pathLoadFileName.append(mStrLoadAtlasFromFile);
-    pathLoadFileName = pathLoadFileName.append(".osa");
+    // No "./" prefix, so absolute paths work too (see SaveAtlas)
+    string pathLoadFileName = mStrLoadAtlasFromFile + ".osa";
 
     if(type == TEXT_FILE) // File text
     {

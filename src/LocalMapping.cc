@@ -133,7 +133,11 @@ void LocalMapping::Run() {
       if (!CheckNewKeyFrames() && !stopRequested()) {
         if (mpAtlas->KeyFramesInMap() > 2) {
 
-          if (mbInertial && mpCurrentKeyFrame->GetMap()->isImuInitialized()) {
+          // The inertial chain restarts (mPrevKF == NULL) when tracking
+          // resumes in a map loaded from disk.
+          if (mbInertial && mpCurrentKeyFrame->GetMap()->isImuInitialized() &&
+              mpCurrentKeyFrame->mPrevKF &&
+              mpCurrentKeyFrame->mPrevKF->mPrevKF) {
             float dist =
                 (mpCurrentKeyFrame->mPrevKF->GetCameraCenter() -
                  mpCurrentKeyFrame->GetCameraCenter())
@@ -937,7 +941,8 @@ void LocalMapping::KeyFrameCulling() {
     count++;
     KeyFrame *pKF = *vit;
 
-    if ((pKF->mnId == pKF->GetMap()->GetInitKFid()) || pKF->isBad())
+    if ((pKF->mnId == pKF->GetMap()->GetInitKFid()) || pKF->isBad() ||
+        pKF->mbFixedPose)
       continue;
     const vector<MapPoint *> vpMapPoints = pKF->GetMapPointMatches();
 

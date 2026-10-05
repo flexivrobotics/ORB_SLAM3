@@ -85,7 +85,15 @@ namespace ORB_SLAM3 {
 
         float TriangulateMatches(GeometricCamera* pCamera2, const cv::KeyPoint& kp1, const cv::KeyPoint& kp2,  const Eigen::Matrix3f& R12, const Eigen::Vector3f& t12, const float sigmaLevel, const float unc, Eigen::Vector3f& p3D);
 
-        std::vector<int> mvLappingArea;
+        // Default member initializer so every constructor leaves this sized
+        // like the others do explicitly, including the no-arg one
+        // boost::serialization default-constructs when deserializing a
+        // camera from a saved atlas: that one doesn't list mvLappingArea in
+        // its init list, and Tracking::GrabImageStereo/Frame::Frame index
+        // into mvLappingArea[0]/[1] unconditionally, so a camera deduped
+        // against that deserialized object (see Atlas::AddCamera) segfaults
+        // on first use via out-of-bounds vector access.
+        std::vector<int> mvLappingArea = std::vector<int>(2, 0);
 
         bool matchAndtriangulate(const cv::KeyPoint& kp1, const cv::KeyPoint& kp2, GeometricCamera* pOther,
                                  Sophus::SE3f& Tcw1, Sophus::SE3f& Tcw2,
@@ -104,7 +112,13 @@ namespace ORB_SLAM3 {
         //Parameters vector corresponds to
         //[fx, fy, cx, cy, k0, k1, k2, k3]
 
-        TwoViewReconstruction* tvr;
+        // Default member initializer so every constructor leaves this safely
+        // null, including the no-arg one boost::serialization default-
+        // constructs when deserializing a camera from a saved atlas -- that
+        // one doesn't list tvr in its init list, and an uninitialized
+        // pointer here reads as "already built" in ReconstructWithTwoViews'
+        // `if(!tvr)` check, segfaulting on first use.
+        TwoViewReconstruction* tvr = nullptr;
 
         void Triangulate(const cv::Point2f &p1, const cv::Point2f &p2, const Eigen::Matrix<float,3,4> &Tcw1,
                          const Eigen::Matrix<float,3,4> &Tcw2, Eigen::Vector3f &x3D);

@@ -54,27 +54,55 @@ int main(int argc, char **argv)
     //   map/trajectory. --viewer-auto-exit skips that wait: the window still
     //   shows live progress, but the process exits as soon as processing
     //   finishes instead of blocking on a manual close.
+    // - --save-atlas <file> saves the resulting atlas to <file>.osa on
+    //   shutdown (overrides System.SaveAtlasToFile in the settings file), so
+    //   it can later be reloaded via System.LoadAtlasFromFile or --load-atlas.
+    // - --load-atlas <file> loads the atlas <file>.osa at startup (overrides
+    //   System.LoadAtlasFromFile). SLAM relocalizes in the loaded map, then
+    //   keeps tracking and mapping in it (full SLAM, not localization mode).
     bool bUseViewer = true;
     bool bAutoExitViewer = false;
+    string strSaveAtlasFile;
+    string strLoadAtlasFile;
     for (int i = 1; i < argc; i++)
     {
         std::string arg = argv[i];
-        if (arg == "--no-viewer" || arg == "--viewer-auto-exit")
+        int nConsumed = 0;
+        if (arg == "--no-viewer")
         {
-            if (arg == "--no-viewer")
-                bUseViewer = false;
+            bUseViewer = false;
+            nConsumed = 1;
+        }
+        else if (arg == "--viewer-auto-exit")
+        {
+            bAutoExitViewer = true;
+            nConsumed = 1;
+        }
+        else if (arg == "--save-atlas" || arg == "--load-atlas")
+        {
+            if (i + 1 >= argc)
+            {
+                cerr << "ERROR: " << arg << " requires a file name" << endl;
+                return 1;
+            }
+            if (arg == "--save-atlas")
+                strSaveAtlasFile = argv[i + 1];
             else
-                bAutoExitViewer = true;
-            for (int j = i; j < argc - 1; j++)
-                argv[j] = argv[j + 1];
-            argc--;
+                strLoadAtlasFile = argv[i + 1];
+            nConsumed = 2;
+        }
+        if (nConsumed > 0)
+        {
+            for (int j = i; j < argc - nConsumed; j++)
+                argv[j] = argv[j + nConsumed];
+            argc -= nConsumed;
             i--;
         }
     }
 
     if(argc < 5)
     {
-        cerr << endl << "Usage: ./stereo_inertial_euroc path_to_vocabulary path_to_settings path_to_sequence_folder_1 path_to_times_file_1 (path_to_image_folder_2 path_to_times_file_2 ... path_to_image_folder_N path_to_times_file_N) [session_name] [--no-viewer] [--viewer-auto-exit]" << endl;
+        cerr << endl << "Usage: ./stereo_inertial_euroc path_to_vocabulary path_to_settings path_to_sequence_folder_1 path_to_times_file_1 (path_to_image_folder_2 path_to_times_file_2 ... path_to_image_folder_N path_to_times_file_N) [session_name] [--no-viewer] [--viewer-auto-exit] [--save-atlas atlas_file] [--load-atlas atlas_file]" << endl;
         return 1;
     }
 
@@ -160,7 +188,9 @@ int main(int argc, char **argv)
     cout.precision(17);
 
     // Create SLAM system. It initializes all system threads and gets ready to process frames.
-    ORB_SLAM3::System SLAM(argv[1],argv[2],ORB_SLAM3::System::IMU_STEREO, bUseViewer);
+    ORB_SLAM3::System SLAM(argv[1],argv[2],ORB_SLAM3::System::IMU_STEREO, bUseViewer, 0, string(), strLoadAtlasFile);
+    if (!strSaveAtlasFile.empty())
+        SLAM.SetSaveAtlasFile(strSaveAtlasFile);
 
     cv::Mat imLeft, imRight;
     for (seq = 0; seq<num_seq; seq++)
@@ -253,7 +283,8 @@ int main(int argc, char **argv)
     // Stop all threads. Must happen before any SaveTrajectory* call below --
     // LocalMapping/LoopClosing keep mutating the map/keyframes until asked to
     // stop, and reading that data concurrently with an in-flight loop closure
-    // or bundle adjustment corrupts the heap.
+    // or bundle adjustment corrupts the heap. Also saves the atlas if
+    // --save-atlas (or System.SaveAtlasToFile) was given.
     SLAM.Shutdown();
 
     // Save camera trajectory. We skip SaveKeyFrameTrajectoryEuRoC here: it's
