@@ -169,7 +169,9 @@ int main(int argc, char **argv)
 
         while(vTimestampsImu[seq][first_imu[seq]]<=vTimestampsCam[seq][0])
             first_imu[seq]++;
-        first_imu[seq]--; // first imu measurement to be considered
+        // first imu measurement to be considered; stays at 0 if the IMU
+        // starts after the first frame
+        first_imu[seq] = max(0, first_imu[seq] - 1);
     }
 
     // Read rectification parameters
@@ -319,6 +321,13 @@ void LoadImages(const string &strPathLeft, const string &strPathRight, const str
 {
     ifstream fTimes;
     fTimes.open(strPathTimes.c_str());
+    if(!fTimes.is_open())
+    {
+        // eof() never becomes true on a stream that failed to open, so the
+        // loop below would spin forever
+        cerr << endl << "ERROR: Failed to open times file: " << strPathTimes << endl;
+        return;
+    }
     vTimeStamps.reserve(5000);
     vstrImageLeft.reserve(5000);
     vstrImageRight.reserve(5000);
@@ -344,6 +353,11 @@ void LoadIMU(const string &strImuPath, vector<double> &vTimeStamps, vector<cv::P
 {
     ifstream fImu;
     fImu.open(strImuPath.c_str());
+    if(!fImu.is_open())
+    {
+        cerr << endl << "ERROR: Failed to open IMU file: " << strImuPath << endl;
+        return;
+    }
     vTimeStamps.reserve(5000);
     vAcc.reserve(5000);
     vGyro.reserve(5000);
