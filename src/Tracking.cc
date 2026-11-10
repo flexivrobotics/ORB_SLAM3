@@ -1385,7 +1385,9 @@ bool Tracking::GetStepByStep() { return bStepByStep; }
 Sophus::SE3f Tracking::GrabImageStereo(const cv::Mat &imRectLeft,
                                        const cv::Mat &imRectRight,
                                        const double &timestamp,
-                                       string filename) {
+                                       string filename,
+                                       const cv::Mat &maskLeft,
+                                       const cv::Mat &maskRight) {
   // cout << "GrabImageStereo" << endl;
 
   mImGray = imRectLeft;
@@ -1417,20 +1419,24 @@ Sophus::SE3f Tracking::GrabImageStereo(const cv::Mat &imRectLeft,
   if (mSensor == System::STEREO && !mpCamera2)
     mCurrentFrame = Frame(mImGray, imGrayRight, timestamp, mpORBextractorLeft,
                           mpORBextractorRight, mpORBVocabulary, mK, mDistCoef,
-                          mbf, mThDepth, mpCamera);
+                          mbf, mThDepth, mpCamera, nullptr, IMU::Calib(),
+                          maskLeft, maskRight);
   else if (mSensor == System::STEREO && mpCamera2)
     mCurrentFrame = Frame(mImGray, imGrayRight, timestamp, mpORBextractorLeft,
                           mpORBextractorRight, mpORBVocabulary, mK, mDistCoef,
-                          mbf, mThDepth, mpCamera, mpCamera2, mTlr);
+                          mbf, mThDepth, mpCamera, mpCamera2, mTlr, nullptr,
+                          IMU::Calib(), maskLeft, maskRight);
   else if (mSensor == System::IMU_STEREO && !mpCamera2)
     mCurrentFrame = Frame(mImGray, imGrayRight, timestamp, mpORBextractorLeft,
                           mpORBextractorRight, mpORBVocabulary, mK, mDistCoef,
-                          mbf, mThDepth, mpCamera, &mLastFrame, *mpImuCalib);
+                          mbf, mThDepth, mpCamera, &mLastFrame, *mpImuCalib,
+                          maskLeft, maskRight);
   else if (mSensor == System::IMU_STEREO && mpCamera2)
     mCurrentFrame =
         Frame(mImGray, imGrayRight, timestamp, mpORBextractorLeft,
               mpORBextractorRight, mpORBVocabulary, mK, mDistCoef, mbf,
-              mThDepth, mpCamera, mpCamera2, mTlr, &mLastFrame, *mpImuCalib);
+              mThDepth, mpCamera, mpCamera2, mTlr, &mLastFrame, *mpImuCalib,
+              maskLeft, maskRight);
 
   // cout << "Incoming frame ended" << endl;
 
