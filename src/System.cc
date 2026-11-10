@@ -265,7 +265,8 @@ System::System(const string &strVocFile, const string &strSettingsFile, const eS
 
 }
 
-Sophus::SE3f System::TrackStereo(const cv::Mat &imLeft, const cv::Mat &imRight, const double &timestamp, const vector<IMU::Point>& vImuMeas, string filename)
+Sophus::SE3f System::TrackStereo(const cv::Mat &imLeft, const cv::Mat &imRight, const double &timestamp, const vector<IMU::Point>& vImuMeas, string filename,
+                                 const cv::Mat &maskLeft, const cv::Mat &maskRight)
 {
     if(mSensor!=STEREO && mSensor!=IMU_STEREO)
     {
@@ -274,6 +275,8 @@ Sophus::SE3f System::TrackStereo(const cv::Mat &imLeft, const cv::Mat &imRight, 
     }
 
     cv::Mat imLeftToFeed, imRightToFeed;
+    // Masks follow their images; nearest-neighbour keeps them binary.
+    cv::Mat maskLeftToFeed = maskLeft, maskRightToFeed = maskRight;
     if(settings_ && settings_->needToRectify()){
         cv::Mat M1l = settings_->M1l();
         cv::Mat M2l = settings_->M2l();
@@ -282,10 +285,18 @@ Sophus::SE3f System::TrackStereo(const cv::Mat &imLeft, const cv::Mat &imRight, 
 
         cv::remap(imLeft, imLeftToFeed, M1l, M2l, cv::INTER_LINEAR);
         cv::remap(imRight, imRightToFeed, M1r, M2r, cv::INTER_LINEAR);
+        if(!maskLeft.empty())
+            cv::remap(maskLeft, maskLeftToFeed, M1l, M2l, cv::INTER_NEAREST);
+        if(!maskRight.empty())
+            cv::remap(maskRight, maskRightToFeed, M1r, M2r, cv::INTER_NEAREST);
     }
     else if(settings_ && settings_->needToResize()){
         cv::resize(imLeft,imLeftToFeed,settings_->newImSize());
         cv::resize(imRight,imRightToFeed,settings_->newImSize());
+        if(!maskLeft.empty())
+            cv::resize(maskLeft, maskLeftToFeed, settings_->newImSize(), 0, 0, cv::INTER_NEAREST);
+        if(!maskRight.empty())
+            cv::resize(maskRight, maskRightToFeed, settings_->newImSize(), 0, 0, cv::INTER_NEAREST);
     }
     else{
         imLeftToFeed = imLeft.clone();
@@ -337,7 +348,7 @@ Sophus::SE3f System::TrackStereo(const cv::Mat &imLeft, const cv::Mat &imRight, 
             mpTracker->GrabImuData(vImuMeas[i_imu]);
 
     // std::cout << "start GrabImageStereo" << std::endl;
-    Sophus::SE3f Tcw = mpTracker->GrabImageStereo(imLeftToFeed,imRightToFeed,timestamp,filename);
+    Sophus::SE3f Tcw = mpTracker->GrabImageStereo(imLeftToFeed,imRightToFeed,timestamp,filename,maskLeftToFeed,maskRightToFeed);
 
     // std::cout << "out grabber" << std::endl;
 

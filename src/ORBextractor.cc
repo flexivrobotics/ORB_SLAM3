@@ -71,6 +71,11 @@ namespace ORB_SLAM3
     const int PATCH_SIZE = 31;
     const int HALF_PATCH_SIZE = 15;
     const int EDGE_THRESHOLD = 19;
+    // How far, in pixels of its pyramid level, the pixels a keypoint's
+    // descriptor depends on reach from it: the rotated 31x31 BRIEF pattern
+    // (points within +-13 px, so up to 13*sqrt(2) px once rotated) after
+    // the 7x7 Gaussian pre-blur (3 px). Covers the 15 px orientation patch.
+    const float MASK_REACH = 13.f * 1.41422f + 3.f;
 
 
     static float IC_Angle(const Mat& image, Point2f pt,  const vector<int> & u_max)
@@ -778,7 +783,7 @@ namespace ORB_SLAM3
         return vResultKeys;
     }
 
-    void ORBextractor::ComputeKeyPointsOctTree(vector<vector<KeyPoint> >& allKeypoints)
+    void ORBextractor::ComputeKeyPointsOctTree(vector<vector<KeyPoint> >& allKeypoints, const Mat &maskDist)
     {
         allKeypoints.resize(nlevels);
 
@@ -796,6 +801,11 @@ namespace ORB_SLAM3
 
             const float width = (maxBorderX-minBorderX);
             const float height = (maxBorderY-minBorderY);
+
+            // Level-0 distance a keypoint at this level must keep from the
+            // mask (see operator()).
+            const float scale = mvScaleFactor[level];
+            const float minMaskDist = MASK_REACH * scale;
 
             const int nCols = width/W;
             const int nRows = height/W;
@@ -864,6 +874,14 @@ namespace ORB_SLAM3
                         {
                             (*vit).pt.x+=j*wCell;
                             (*vit).pt.y+=i*hCell;
+                            if(!maskDist.empty())
+                            {
+                                // pt is relative to (minBorderX, minBorderY) at this level.
+                                const int x0 = min(maskDist.cols-1, max(0, cvRound(((*vit).pt.x+minBorderX)*scale)));
+                                const int y0 = min(maskDist.rows-1, max(0, cvRound(((*vit).pt.y+minBorderY)*scale)));
+                                if(maskDist.at<float>(y0,x0) <= minMaskDist)
+                                    continue;
+                            }
                             vToDistributeKeys.push_back(*vit);
                         }
                     }
@@ -1096,8 +1114,18 @@ namespace ORB_SLAM3
         // Pre-compute the scale pyramid
         ComputePyramid(image);
 
+        // Distance from every pixel to the nearest masked (nonzero) one, so a
+        // keypoint's descriptor patch can be checked against the mask in O(1).
+        Mat maskDist;
+        Mat mask = _mask.getMat();
+        if(!mask.empty() && countNonZero(mask) > 0)
+        {
+            CV_Assert(mask.type() == CV_8UC1 && mask.size() == image.size());
+            distanceTransform(mask == 0, maskDist, DIST_L2, DIST_MASK_PRECISE);
+        }
+
         vector < vector<KeyPoint> > allKeypoints;
-        ComputeKeyPointsOctTree(allKeypoints);
+        ComputeKeyPointsOctTree(allKeypoints, maskDist);
         //ComputeKeyPointsOld(allKeypoints);
 
         Mat descriptors;

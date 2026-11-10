@@ -53,7 +53,11 @@ public:
 
     // Compute the ORB features and descriptors on an image.
     // ORB are dispersed on the image using an octree.
-    // Mask is ignored in the current implementation.
+    // _mask (optional, CV_8UC1, image size) excludes features: nonzero pixels
+    // are masked out, and a keypoint is dropped if its descriptor patch at its
+    // pyramid level (plus the descriptor's pre-blur) would cover any masked
+    // pixel. Keypoints are dropped before the octree distributes the feature
+    // budget, so the rest of the image gets the masked area's share.
     int operator()( cv::InputArray _image, cv::InputArray _mask,
                     std::vector<cv::KeyPoint>& _keypoints,
                     cv::OutputArray _descriptors, std::vector<int> &vLappingArea);
@@ -85,7 +89,10 @@ public:
 protected:
 
     void ComputePyramid(cv::Mat image);
-    void ComputeKeyPointsOctTree(std::vector<std::vector<cv::KeyPoint> >& allKeypoints);    
+    // maskDist: empty, or for every level-0 pixel its distance (px) to the
+    // nearest masked pixel; see operator().
+    void ComputeKeyPointsOctTree(std::vector<std::vector<cv::KeyPoint> >& allKeypoints,
+                                 const cv::Mat &maskDist = cv::Mat());
     std::vector<cv::KeyPoint> DistributeOctTree(const std::vector<cv::KeyPoint>& vToDistributeKeys, const int &minX,
                                            const int &maxX, const int &minY, const int &maxY, const int &nFeatures, const int &level);
 

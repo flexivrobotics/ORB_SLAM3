@@ -124,14 +124,62 @@ static void SaveQualityCsv(const string &filename, const vector<FrameQuality> &v
 }
 
 
+// Per-frame feature exclusion masks (see --feature-mask-dir): the mask of
+// image "<seq>/mav0/cam0/data/<ts>.png" is "<seq>/<maskDir>/cam0/<ts>.png"
+// (cam1 likewise), nonzero where ORB features must not be extracted. A frame
+// without a mask file has no mask.
+static vector<string> MaskPaths(const string &maskCamDir, const vector<string> &vstrImages)
+{
+    vector<string> vPaths;
+    vPaths.reserve(vstrImages.size());
+    for (const string &image : vstrImages)
+        vPaths.push_back(maskCamDir + "/" + image.substr(image.find_last_of('/') + 1));
+    return vPaths;
+}
+
+// An empty Mat if there's no mask (no path list, or no file), else the mask.
+// Exits if a mask file can't be read or doesn't match its image.
+static cv::Mat LoadMask(const vector<string> &vPaths, size_t i, const cv::Mat &image)
+{
+    if (vPaths.empty() || !ifstream(vPaths[i]).good())
+        return cv::Mat();
+    cv::Mat mask = cv::imread(vPaths[i], cv::IMREAD_GRAYSCALE);
+    if (mask.empty() || mask.size() != image.size())
+    {
+        cerr << endl << "ERROR: mask " << vPaths[i] << " is unreadable or not " << image.cols << "x" << image.rows << endl;
+        exit(1);
+    }
+    return mask;
+}
+
+struct StereoInput
+{
+    cv::Mat left, right, maskLeft, maskRight;
+};
+
+static StereoInput LoadStereoInput(const vector<string> &vstrLeft, const vector<string> &vstrRight,
+                                   const vector<string> &vstrMaskLeft, const vector<string> &vstrMaskRight, size_t i)
+{
+    StereoInput in;
+    in.left = cv::imread(vstrLeft[i], cv::IMREAD_UNCHANGED);
+    in.right = cv::imread(vstrRight[i], cv::IMREAD_UNCHANGED);
+    if (!in.left.empty())
+        in.maskLeft = LoadMask(vstrMaskLeft, i, in.left);
+    if (!in.right.empty())
+        in.maskRight = LoadMask(vstrMaskRight, i, in.right);
+    return in;
+}
+
 // Decodes a sequence's stereo pairs on a background thread, up to maxQueued
 // frames ahead of tracking, so cv::imread's PNG decoding (~8.5ms/frame at our
 // resolution) overlaps with tracking instead of adding to every frame period.
 class StereoImagePrefetcher
 {
 public:
-    StereoImagePrefetcher(const vector<string> &vstrLeft, const vector<string> &vstrRight, size_t maxQueued)
-        : mvstrLeft(vstrLeft), mvstrRight(vstrRight), mMaxQueued(maxQueued),
+    StereoImagePrefetcher(const vector<string> &vstrLeft, const vector<string> &vstrRight,
+                          const vector<string> &vstrMaskLeft, const vector<string> &vstrMaskRight, size_t maxQueued)
+        : mvstrLeft(vstrLeft), mvstrRight(vstrRight), mvstrMaskLeft(vstrMaskLeft), mvstrMaskRight(vstrMaskRight),
+          mMaxQueued(maxQueued),
           mThread(&StereoImagePrefetcher::Run, this)
     {
     }
@@ -146,16 +194,16 @@ public:
         mThread.join();
     }
 
-    // Returns the next frame's pair, in order, blocking until it's decoded.
-    // An image is empty if it failed to load.
-    void Pop(cv::Mat &imLeft, cv::Mat &imRight)
+    // Returns the next frame's pair (and masks), in order, blocking until
+    // it's decoded. An image is empty if it failed to load.
+    StereoInput Pop()
     {
         unique_lock<mutex> lock(mMutex);
         mCond.wait(lock, [this]{ return !mQueue.empty(); });
-        imLeft = mQueue.front().first;
-        imRight = mQueue.front().second;
+        StereoInput in = mQueue.front();
         mQueue.pop_front();
         mCond.notify_all();
+        return in;
     }
 
     // Total time the background thread spent decoding images so far.
@@ -177,12 +225,11 @@ private:
                     return;
             }
             const auto t0 = std::chrono::steady_clock::now();
-            cv::Mat imLeft = cv::imread(mvstrLeft[i], cv::IMREAD_UNCHANGED);
-            cv::Mat imRight = cv::imread(mvstrRight[i], cv::IMREAD_UNCHANGED);
+            StereoInput in = LoadStereoInput(mvstrLeft, mvstrRight, mvstrMaskLeft, mvstrMaskRight, i);
             const double decodeS = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
             {
                 lock_guard<mutex> lock(mMutex);
-                mQueue.emplace_back(imLeft, imRight);
+                mQueue.push_back(in);
                 mDecodeS += decodeS;
             }
             mCond.notify_all();
@@ -191,10 +238,12 @@ private:
 
     const vector<string> &mvstrLeft;
     const vector<string> &mvstrRight;
+    const vector<string> &mvstrMaskLeft;
+    const vector<string> &mvstrMaskRight;
     const size_t mMaxQueued;
     mutex mMutex;
     condition_variable mCond;
-    deque<pair<cv::Mat, cv::Mat>> mQueue;
+    deque<StereoInput> mQueue;
     bool mbStop = false;
     double mDecodeS = 0;
     // Last, so every member above is initialized before Run() starts.
@@ -228,11 +277,17 @@ int main(int argc, char **argv)
     //   alone ~15% faster, but with several runs at once on the same machine
     //   it slowed tracking down and delayed relocalization into a loaded
     //   atlas (see flexiv_gdk's PARALLEL_VIO_PLAN.md).
+    // - --feature-mask-dir <dir> excludes ORB features where each frame's mask
+    //   "<sequence>/<dir>/cam{0,1}/<timestamp>.png" is nonzero (see
+    //   MaskPaths()), e.g. flexiv_gdk's AprilTag plate masks, so SLAM can't
+    //   track on the ground-truth target. Frames without a mask file are
+    //   unmasked.
     bool bUseViewer = true;
     bool bPrefetchImages = false;
     bool bAutoExitViewer = false;
     string strSaveAtlasFile;
     string strLoadAtlasFile;
+    string strMaskDir;
     for (int i = 1; i < argc; i++)
     {
         std::string arg = argv[i];
@@ -252,17 +307,19 @@ int main(int argc, char **argv)
             bPrefetchImages = true;
             nConsumed = 1;
         }
-        else if (arg == "--save-atlas" || arg == "--load-atlas")
+        else if (arg == "--save-atlas" || arg == "--load-atlas" || arg == "--feature-mask-dir")
         {
             if (i + 1 >= argc)
             {
-                cerr << "ERROR: " << arg << " requires a file name" << endl;
+                cerr << "ERROR: " << arg << " requires a " << (arg == "--feature-mask-dir" ? "directory" : "file") << " name" << endl;
                 return 1;
             }
             if (arg == "--save-atlas")
                 strSaveAtlasFile = argv[i + 1];
-            else
+            else if (arg == "--load-atlas")
                 strLoadAtlasFile = argv[i + 1];
+            else
+                strMaskDir = argv[i + 1];
             nConsumed = 2;
         }
         if (nConsumed > 0)
@@ -276,7 +333,7 @@ int main(int argc, char **argv)
 
     if(argc < 5)
     {
-        cerr << endl << "Usage: ./stereo_inertial_euroc path_to_vocabulary path_to_settings path_to_sequence_folder_1 path_to_times_file_1 (path_to_image_folder_2 path_to_times_file_2 ... path_to_image_folder_N path_to_times_file_N) [session_name] [--no-viewer] [--viewer-auto-exit] [--prefetch-images] [--save-atlas atlas_file] [--load-atlas atlas_file]" << endl;
+        cerr << endl << "Usage: ./stereo_inertial_euroc path_to_vocabulary path_to_settings path_to_sequence_folder_1 path_to_times_file_1 (path_to_image_folder_2 path_to_times_file_2 ... path_to_image_folder_N path_to_times_file_N) [session_name] [--no-viewer] [--viewer-auto-exit] [--prefetch-images] [--save-atlas atlas_file] [--load-atlas atlas_file] [--feature-mask-dir dir]" << endl;
         return 1;
     }
 
@@ -295,6 +352,7 @@ int main(int argc, char **argv)
     int seq;
     vector< vector<string> > vstrImageLeft;
     vector< vector<string> > vstrImageRight;
+    vector< vector<string> > vstrMaskLeft, vstrMaskRight;  // empty without --feature-mask-dir
     vector< vector<double> > vTimestampsCam;
     vector< vector<cv::Point3f> > vAcc, vGyro;
     vector< vector<double> > vTimestampsImu;
@@ -304,6 +362,8 @@ int main(int argc, char **argv)
 
     vstrImageLeft.resize(num_seq);
     vstrImageRight.resize(num_seq);
+    vstrMaskLeft.resize(num_seq);
+    vstrMaskRight.resize(num_seq);
     vTimestampsCam.resize(num_seq);
     vAcc.resize(num_seq);
     vGyro.resize(num_seq);
@@ -325,6 +385,11 @@ int main(int argc, char **argv)
 
         LoadImages(pathCam0, pathCam1, pathTimeStamps, vstrImageLeft[seq], vstrImageRight[seq], vTimestampsCam[seq]);
         cout << "LOADED!" << endl;
+        if (!strMaskDir.empty())
+        {
+            vstrMaskLeft[seq] = MaskPaths(pathSeq + "/" + strMaskDir + "/cam0", vstrImageLeft[seq]);
+            vstrMaskRight[seq] = MaskPaths(pathSeq + "/" + strMaskDir + "/cam1", vstrImageRight[seq]);
+        }
 
         cout << "Loading IMU for sequence " << seq << "...";
         LoadIMU(pathImu, vTimestampsImu[seq], vAcc[seq], vGyro[seq]);
@@ -395,21 +460,23 @@ int main(int argc, char **argv)
         double imageWaitS = 0;
         vector<FrameQuality> vFrameQuality;
         vFrameQuality.reserve(nImages[seq]);
+        int nMaskedLeft = 0, nMaskedRight = 0;
         unique_ptr<StereoImagePrefetcher> prefetcher;
         if (bPrefetchImages)
-            prefetcher.reset(new StereoImagePrefetcher(vstrImageLeft[seq], vstrImageRight[seq], 8));
+            prefetcher.reset(new StereoImagePrefetcher(vstrImageLeft[seq], vstrImageRight[seq],
+                                                       vstrMaskLeft[seq], vstrMaskRight[seq], 8));
         for(int ni=0; ni<nImages[seq]; ni++, proccIm++)
         {
             // Read left and right images, from file or already decoded in the
             // background
             const auto tRead = std::chrono::steady_clock::now();
-            if (prefetcher)
-                prefetcher->Pop(imLeft, imRight);
-            else
-            {
-                imLeft = cv::imread(vstrImageLeft[seq][ni],cv::IMREAD_UNCHANGED);
-                imRight = cv::imread(vstrImageRight[seq][ni],cv::IMREAD_UNCHANGED);
-            }
+            const StereoInput in = prefetcher
+                ? prefetcher->Pop()
+                : LoadStereoInput(vstrImageLeft[seq], vstrImageRight[seq], vstrMaskLeft[seq], vstrMaskRight[seq], ni);
+            imLeft = in.left;
+            imRight = in.right;
+            nMaskedLeft += !in.maskLeft.empty();
+            nMaskedRight += !in.maskRight.empty();
 
             if(imLeft.empty())
             {
@@ -448,7 +515,7 @@ int main(int argc, char **argv)
     #endif
 
             // Pass the images to the SLAM system
-            SLAM.TrackStereo(imLeft,imRight,tframe,vImuMeas);
+            SLAM.TrackStereo(imLeft,imRight,tframe,vImuMeas,"",in.maskLeft,in.maskRight);
 
     #ifdef COMPILEDWITHC11
             std::chrono::steady_clock::time_point t2 = std::chrono::steady_clock::now();
@@ -507,6 +574,9 @@ int main(int argc, char **argv)
                  << defaultfloat << endl;
         }
         PrintQualityStats(seq, vFrameQuality, vTimestampsCam[seq].front());
+        if (!strMaskDir.empty())
+            cout << "[mask] seq=" << seq << " dir=" << strMaskDir << " frames=" << nImages[seq]
+                 << " masked_cam0=" << nMaskedLeft << " masked_cam1=" << nMaskedRight << endl;
         vAllFrameQuality.insert(vAllFrameQuality.end(), vFrameQuality.begin(), vFrameQuality.end());
 
         if(seq < num_seq - 1)
